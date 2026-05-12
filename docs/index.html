@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#6431ca" />
+    <title>Wine Order Count</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Local browser app</p>
+          <h1>Wine Order Count</h1>
+          <p class="subtitle">
+            Import sales and inventory files, count stock, review order needs,
+            and export everything without a backend.
+          </p>
+        </div>
+        <div class="save-card">
+          <span>Last saved</span>
+          <strong id="lastSavedText">Never</strong>
+        </div>
+      </header>
+
+      <section class="toolbar card">
+        <input id="salesFileInput" type="file" accept=".xlsx,.csv" hidden />
+        <input id="inventoryFileInput" type="file" accept=".xlsx,.csv" hidden />
+        <button id="uploadSalesButton" class="primary-button">
+          Upload Sales File
+        </button>
+        <button id="uploadInventoryButton" class="secondary-button">
+          Upload Inventory File
+        </button>
+        <button id="saveProgressButton" class="secondary-button">
+          Save Progress
+        </button>
+        <button id="exportInventoryButton" class="secondary-button">
+          Export Inventory
+        </button>
+        <button id="exportOrdersButton" class="secondary-button">
+          Export Order List
+        </button>
+        <button id="settingsButton" class="ghost-button">Settings</button>
+      </section>
+
+      <div id="statusBanner" class="status-banner" role="status">
+        Load an inventory file to begin.
+      </div>
+
+      <nav class="tabs" aria-label="Main sections">
+        <button class="tab-button active" data-tab="inventory">Inventory</button>
+        <button class="tab-button" data-tab="ordering">Ordering</button>
+        <button class="tab-button" data-tab="settings">Settings</button>
+      </nav>
+
+      <main>
+        <section id="inventoryTab" class="tab-panel active">
+          <div class="section-heading">
+            <div>
+              <h2>Inventory</h2>
+              <p>Front is units. Backstock is full cases.</p>
+            </div>
+            <div id="inventorySummary" class="summary-grid"></div>
+          </div>
+          <div class="table-card">
+            <div id="inventoryTable" class="table-wrap"></div>
+          </div>
+        </section>
+
+        <section id="orderingTab" class="tab-panel">
+          <div class="section-heading">
+            <div>
+              <h2>Ordering</h2>
+              <p>Recommendations use recent sales and current stock.</p>
+            </div>
+            <div id="orderingSummary" class="summary-grid"></div>
+          </div>
+          <div class="ordering-actions">
+            <button id="applyDeductionButton" class="secondary-button">
+              Apply Sales Deduction
+            </button>
+            <span id="deductionStatus" class="small-muted"></span>
+          </div>
+          <div class="table-card">
+            <div id="orderingTable" class="table-wrap"></div>
+          </div>
+          <details class="card unmatched-card">
+            <summary>Unmatched sales rows</summary>
+            <div id="unmatchedList" class="unmatched-list"></div>
+          </details>
+        </section>
+
+        <section id="settingsTab" class="tab-panel">
+          <div class="settings-grid">
+            <section class="card">
+              <h2>Data Management</h2>
+              <button id="clearSalesButton" class="secondary-button danger">
+                Clear prior sales data
+              </button>
+              <button id="clearInventoryButton" class="secondary-button danger">
+                Clear inventory count data
+              </button>
+              <button id="clearAllButton" class="secondary-button danger">
+                Clear all saved local data
+              </button>
+            </section>
+            <section class="card">
+              <h2>Export</h2>
+              <button id="settingsExportInventoryButton" class="secondary-button">
+                Export current inventory levels
+              </button>
+              <button id="settingsExportOrdersButton" class="secondary-button">
+                Export current recommendations/order list
+              </button>
+              <p class="small-muted">
+                All exports are generated in this browser as CSV files.
+              </p>
+            </section>
+            <section class="card">
+              <h2>Settings</h2>
+              <label class="field-row">
+                Target weeks of supply
+                <input id="targetWeeksInput" type="number" min="0.5" step="0.5" />
+              </label>
+              <p class="small-muted">
+                Saved locally in this browser only. No cloud sync is used.
+              </p>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" aria-live="polite"></div>
+
+    <script src="vendor/xlsx.full.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
