@@ -1,79 +1,34 @@
-const STORAGE_KEY = "wine-order-count-static-v1";
+﻿const STORAGE_KEY = "wine-order-count-static-v1";
+const STORE_REGISTRY_KEY = "wine-order-count-store-registry-v1";
+const DEFAULT_STORE_NUMBER = "default";
+const FIREBASE_SAVE_DEBOUNCE_MS = 900;
 const DEFAULT_TARGET_WEEKS = 2;
-
-const CATEGORY_CONFIG = [
-  {
-    name: "Premium",
-    upcs: [
-      "80098877", "80098876", "80098878", "80094413", "80094414",
-      "80096856", "80096855", "80096857", "317016", "988103", "261099",
-      "80003853", "80020465", "80060055", "80059448", "219543", "586388",
-      "988129", "981415", "981332", "981233", "988130", "988102",
-      "80023908", "988055", "80011977", "80097811", "560680", "526228",
-      "988319", "618421", "988320", "618413", "80018559", "80095405",
-      "80095404", "80095406", "80099905", "80087078", "80087080",
-      "80095212", "80095211", "80087082", "80087068", "80087069",
-      "80087079", "80087083", "80094698", "80087085", "80087102",
-      "80098996", "80060253", "80084428", "80092411", "80059250",
-      "80060252",
-    ],
-  },
-  {
-    name: "Core",
-    upcs: [
-      "80091176", "80095812", "80091174", "80085897", "80085895",
-      "80065018", "80023337", "80062732", "80099122", "80099121",
-      "80023604", "80015842", "988285", "80055726", "331025", "328534",
-      "80083707", "328526", "80014111", "377820", "383711", "80098063",
-      "80098065", "987503", "989921", "80083815", "80083978", "399428",
-      "399410", "80099116", "80099118", "988291", "988093", "80024647",
-      "80016840", "985911", "988015", "983197", "983205", "572917",
-      "80087232", "80097276", "80097277", "80060870", "988281",
-      "80083791", "988276",
-    ],
-  },
-  {
-    name: "Rose/Sparkling",
-    upcs: [
-      "80085899", "80093814", "80082106", "80091929", "551085",
-      "80003789", "80003392", "80082731", "80099662", "80084918",
-      "80084913", "80087073", "80096832", "80093810", "80087746",
-      "80095733", "80095186", "80097278", "80082765", "80086329",
-      "80087074", "80091768",
-    ],
-  },
-  {
-    name: "Large Format",
-    upcs: [
-      "80090370", "80094019", "80090375", "80090372", "80096815",
-      "80099115", "80099114", "80010516", "80010511", "80010385",
-      "80010509", "80089861", "80010517", "80010507", "80010506",
-      "80003157", "80012293", "587584", "587659",
-    ],
-  },
-  {
-    name: "Refreshments",
-    upcs: [
-      "80087830", "80087831", "80091006", "80090894", "80091007",
-      "80091005", "80095810", "80095811", "80084701", "80091013",
-      "240333", "984914", "80065964", "80082375", "80003052",
-      "80057695", "80064690", "80082372", "80088150", "80092651",
-      "80092647",
-    ],
-  },
-  {
-    name: "CVQA",
-    upcs: [
-      "80086441", "80086442", "80098880", "80086423", "80086422",
-      "80090817", "80086425", "80086424", "80098033", "80098470",
-      "80059009", "80059136", "80059011", "80086431", "80086432",
-      "80059144", "80059012", "80059194", "80099449", "80058787",
-      "80058788", "80098032", "80059022", "80090814", "80086437",
-      "80086439", "80086436", "80090816", "80059024", "80059026",
-      "80059212", "80059213", "80059124", "80059125",
-    ],
-  },
+const SKU_HEADER_ALIASES = [
+  "jde",
+  "sku",
+  "upc",
+  "jde/upc",
+  "jde/upc #",
+  "jde upc",
+  "jde upc #",
+  "jde #",
+  "upc #",
+  "sku #",
+  "item number",
+  "product number",
+  "sku / id",
+  "sku/id",
+  "id",
+  "barcode",
+  "product code",
 ];
+
+const CATEGORY_CONFIG = CATEGORY_ORDER.map(name => ({
+  name,
+  upcs: PRODUCT_CATALOG
+    .filter(product => product.category === name)
+    .map(product => product.sku),
+}));
 
 const categoryByUpc = new Map();
 const orderByUpc = new Map();
@@ -90,6 +45,10 @@ const dom = {
   inventoryInput: document.getElementById("inventoryFileInput"),
   uploadSalesButton: document.getElementById("uploadSalesButton"),
   uploadInventoryButton: document.getElementById("uploadInventoryButton"),
+  storeSelect: document.getElementById("storeSelect"),
+  addStoreButton: document.getElementById("addStoreButton"),
+  currentStoreText: document.getElementById("currentStoreText"),
+  syncStatusText: document.getElementById("syncStatusText"),
   saveProgressButton: document.getElementById("saveProgressButton"),
   exportInventoryButton: document.getElementById("exportInventoryButton"),
   exportOrdersButton: document.getElementById("exportOrdersButton"),
@@ -107,21 +66,35 @@ const dom = {
   targetWeeksInput: document.getElementById("targetWeeksInput"),
   clearSalesButton: document.getElementById("clearSalesButton"),
   clearInventoryButton: document.getElementById("clearInventoryButton"),
+  clearSaleFlagsButton: document.getElementById("clearSaleFlagsButton"),
+  restoreDeletedItemsButton: document.getElementById("restoreDeletedItemsButton"),
   clearAllButton: document.getElementById("clearAllButton"),
+  saleOnlyToggle: document.getElementById("saleOnlyToggle"),
   settingsExportInventoryButton: document.getElementById("settingsExportInventoryButton"),
   settingsExportOrdersButton: document.getElementById("settingsExportOrdersButton"),
 };
 
-let state = loadState();
+let storeRegistry = loadStoreRegistry();
+let currentStoreNumber = storeRegistry.currentStore;
+let state = loadState(currentStoreNumber);
 let saveTimer = null;
+let firebaseSaveTimer = null;
+let editingProductId = null;
+let syncStatus = "Local only";
+let isSwitchingStore = false;
 
 bindEvents();
 render();
 registerServiceWorker();
+initializeFirebaseSync();
 
 function defaultState() {
   return {
-    inventory: { products: [] },
+    storeNumber: currentStoreNumber || DEFAULT_STORE_NUMBER,
+    inventory: { products: catalogProducts() },
+    productOverrides: {},
+    deletedItems: [],
+    skuAliases: {},
     sales: { sessions: [], activeSessionId: null },
     processing: {
       matched: [],
@@ -129,20 +102,155 @@ function defaultState() {
       deductions: [],
       recommendations: [],
     },
-    settings: { targetWeeks: DEFAULT_TARGET_WEEKS },
+    settings: { targetWeeks: DEFAULT_TARGET_WEEKS, showSaleOnly: false },
     lastSaved: null,
   };
 }
 
-function loadState() {
+function loadStoreRegistry() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const parsed = JSON.parse(localStorage.getItem(STORE_REGISTRY_KEY) || "{}");
+    const stores = [...new Set((parsed.stores || [DEFAULT_STORE_NUMBER]).map(cleanText).filter(Boolean))];
+    const currentStore = cleanText(parsed.currentStore) || stores[0] || DEFAULT_STORE_NUMBER;
+    if (!stores.includes(currentStore)) stores.unshift(currentStore);
+    return { stores, currentStore };
+  } catch {
+    return { stores: [DEFAULT_STORE_NUMBER], currentStore: DEFAULT_STORE_NUMBER };
+  }
+}
+
+function saveStoreRegistry() {
+  localStorage.setItem(STORE_REGISTRY_KEY, JSON.stringify({
+    stores: storeRegistry.stores,
+    currentStore: currentStoreNumber,
+  }));
+}
+
+function storageKeyForStore(storeNumber) {
+  const safeStore = encodeURIComponent(cleanText(storeNumber) || DEFAULT_STORE_NUMBER);
+  return `${STORAGE_KEY}_store_${safeStore}`;
+}
+
+function migrateLegacyStorageIfNeeded(storeNumber) {
+  if (storeNumber !== DEFAULT_STORE_NUMBER) return;
+  const storeKey = storageKeyForStore(storeNumber);
+  if (localStorage.getItem(storeKey)) return;
+  const legacyState = localStorage.getItem(STORAGE_KEY);
+  if (legacyState) localStorage.setItem(storeKey, legacyState);
+}
+
+function catalogProducts(meta = {}) {
+  const overrides = meta.productOverrides || {};
+  const deleted = new Set((meta.deletedItems || []).map(normalizeUpc));
+  return PRODUCT_CATALOG.map(product => ({
+    id: normalizeUpc(overrides[normalizeUpc(product.sku)]?.sku || product.sku),
+    sourceSku: normalizeUpc(product.sku),
+    name: cleanText(overrides[normalizeUpc(product.sku)]?.description || product.description),
+    category: product.category,
+    quantity: 0,
+    originalQuantity: 0,
+    backstock: 0,
+    originalBackstock: 0,
+    lastUpdated: null,
+    notes: "",
+    overrideCases: "",
+    onSale: false,
+    isCatalogProduct: true,
+  })).filter(product => !deleted.has(product.sourceSku));
+}
+
+function mergeProductsWithCatalog(products, meta = state) {
+  const overrides = meta.productOverrides || {};
+  const deleted = new Set((meta.deletedItems || []).map(normalizeUpc));
+  const byId = new Map();
+  const bySource = new Map();
+  for (const product of products || []) {
+    const id = normalizeUpc(product.id || product.sku);
+    if (!id) continue;
+    const sourceSku = sourceSkuForProduct(product, meta);
+    const normalized = {
+      ...product,
+      id,
+      sourceSku,
+      name: cleanText(product.name || product.description) || "Unnamed product",
+    };
+    byId.set(id, normalized);
+    bySource.set(sourceSku, normalized);
+  }
+
+  const mergedCatalog = PRODUCT_CATALOG
+    .filter(catalogProduct => !deleted.has(normalizeUpc(catalogProduct.sku)))
+    .map(catalogProduct => {
+    const sourceSku = normalizeUpc(catalogProduct.sku);
+    const override = overrides[sourceSku] || {};
+    const id = normalizeUpc(override.sku || catalogProduct.sku);
+    const existing = bySource.get(sourceSku) || byId.get(id) || byId.get(sourceSku);
+    return {
+      id,
+      sourceSku,
+      name: cleanText(override.description || catalogProduct.description),
+      category: catalogProduct.category,
+      quantity: existing?.quantity ?? 0,
+      originalQuantity: existing?.originalQuantity ?? existing?.quantity ?? 0,
+      backstock: existing?.backstock ?? 0,
+      originalBackstock: existing?.originalBackstock ?? existing?.backstock ?? 0,
+      lastUpdated: existing?.lastUpdated || null,
+      notes: existing?.notes || "",
+      overrideCases: existing?.overrideCases ?? "",
+      onSale: existing?.onSale || false,
+      isCatalogProduct: true,
+    };
+  });
+
+  const unknownProducts = [...byId.values()]
+    .filter(product => {
+      if (deleted.has(product.sourceSku) || deleted.has(product.id)) return false;
+      if (skuToProductMap.has(product.sourceSku) || skuToProductMap.has(product.id)) return false;
+      return true;
+    })
+    .map(product => ({
+      id: product.id,
+      sourceSku: product.sourceSku || product.id,
+      name: product.name || "Unnamed product",
+      category: "Unmatched Products",
+      quantity: product.quantity ?? 0,
+      originalQuantity: product.originalQuantity ?? product.quantity ?? 0,
+      backstock: product.backstock ?? 0,
+      originalBackstock: product.originalBackstock ?? product.backstock ?? 0,
+      lastUpdated: product.lastUpdated || null,
+      notes: product.notes || "",
+      overrideCases: product.overrideCases ?? "",
+      onSale: product.onSale || false,
+      isCatalogProduct: false,
+    }));
+
+  return sortProducts([...mergedCatalog, ...unknownProducts]);
+}
+
+function sourceSkuForProduct(product, meta = state) {
+  const id = normalizeUpc(product.sourceSku || product.id || product.sku);
+  if (product.sourceSku) return id;
+  const productId = normalizeUpc(product.id || product.sku);
+  const overrides = meta.productOverrides || {};
+  for (const [sourceSku, override] of Object.entries(overrides)) {
+    if (normalizeUpc(override?.sku) === productId) return normalizeUpc(sourceSku);
+  }
+  return productId;
+}
+
+function loadState(storeNumber = currentStoreNumber || DEFAULT_STORE_NUMBER) {
+  try {
+    migrateLegacyStorageIfNeeded(storeNumber);
+    const raw = localStorage.getItem(storageKeyForStore(storeNumber));
     if (!raw) return defaultState();
     const parsed = JSON.parse(raw);
-    return {
+    const hydrated = {
       ...defaultState(),
       ...parsed,
-      inventory: { products: parsed.inventory?.products || [] },
+      storeNumber,
+      productOverrides: parsed.productOverrides || {},
+      deletedItems: parsed.deletedItems || [],
+      skuAliases: parsed.skuAliases || {},
       sales: {
         sessions: parsed.sales?.sessions || [],
         activeSessionId: parsed.sales?.activeSessionId || null,
@@ -155,19 +263,32 @@ function loadState() {
       },
       settings: {
         targetWeeks: Number(parsed.settings?.targetWeeks) || DEFAULT_TARGET_WEEKS,
+        showSaleOnly: parsed.settings?.showSaleOnly === true,
       },
       lastSaved: parsed.lastSaved || null,
     };
+    hydrated.inventory = {
+      products: mergeProductsWithCatalog(parsed.inventory?.products || [], hydrated),
+    };
+    return hydrated;
   } catch {
     return defaultState();
   }
 }
 
-function saveState({ showConfirmation = false } = {}) {
+function saveLocalBackup() {
   state.lastSaved = new Date().toISOString();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  state.storeNumber = currentStoreNumber;
+  localStorage.setItem(storageKeyForStore(currentStoreNumber), JSON.stringify(state));
+  saveStoreRegistry();
   renderLastSaved();
-  if (showConfirmation) showToast("Progress saved locally.");
+}
+
+function saveState({ showConfirmation = false } = {}) {
+  saveLocalBackup();
+  setSyncStatus("Local only");
+  scheduleFirebaseSave();
+  if (showConfirmation) showToast("Firebase save queued.");
 }
 
 function scheduleSave() {
@@ -175,25 +296,152 @@ function scheduleSave() {
   saveTimer = setTimeout(() => saveState(), 250);
 }
 
+function scheduleFirebaseSave() {
+  clearTimeout(firebaseSaveTimer);
+  if (isSwitchingStore) return;
+  firebaseSaveTimer = setTimeout(() => syncCurrentStoreToFirebase({ silent: true }), FIREBASE_SAVE_DEBOUNCE_MS);
+}
+
+async function syncCurrentStoreToFirebase({ throwOnError = false, silent = false } = {}) {
+  const storeNumber = selectedFirebaseStoreNumber();
+  if (!storeNumber) {
+    setSyncStatus("Local only");
+    if (!silent) showToast("Select or add a store number before saving to Firebase.");
+    return false;
+  }
+  if (!window.WineFirebaseSync?.saveStoreState) {
+    setSyncStatus("Local only");
+    return false;
+  }
+  try {
+    setSyncStatus("Saving to Firebase…");
+    await window.WineFirebaseSync.saveStoreState(storeNumber, serializeStateForFirestore());
+    if (storeNumber === currentStoreNumber) setSyncStatus("Synced to Firebase");
+    return true;
+  } catch (error) {
+    if (storeNumber === currentStoreNumber) {
+      setSyncStatus("Firebase save failed");
+      setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
+    }
+    console.error("Firebase save failed", error);
+    if (throwOnError) throw error;
+    return false;
+  }
+}
+
+async function saveProjectNow() {
+  clearTimeout(saveTimer);
+  clearTimeout(firebaseSaveTimer);
+  if (!selectedFirebaseStoreNumber()) {
+    saveLocalBackup();
+    setSyncStatus("Local only");
+    showToast("Select or add a store number before saving to Firebase.");
+    return;
+  }
+  saveLocalBackup();
+  if (!window.WineFirebaseSync?.saveStoreState) {
+    setSyncStatus("Local only");
+    showToast("Firebase is not available. Project saved locally only.");
+    return;
+  }
+  try {
+    await syncCurrentStoreToFirebase({ throwOnError: true });
+    showToast("Project saved to Firebase");
+    setStatus(`Project saved to Firebase for Store ${currentStoreNumber}.`);
+  } catch (error) {
+    showToast("Firebase save failed. Project saved locally only.");
+    setStatus("Firebase save failed. Project saved locally only.", true);
+  }
+}
+
+function selectedFirebaseStoreNumber() {
+  const storeNumber = cleanText(currentStoreNumber);
+  return storeNumber && storeNumber !== DEFAULT_STORE_NUMBER ? storeNumber : "";
+}
+
+function serializeStateForFirestore() {
+  const cleanState = JSON.parse(JSON.stringify(state));
+  const products = cleanState.inventory?.products || [];
+  return {
+    ...cleanState,
+    storeNumber: currentStoreNumber,
+    inventoryCounts: Object.fromEntries(products.map(product => [product.id, product.quantity || 0])),
+    frontStock: Object.fromEntries(products.map(product => [product.id, product.quantity || 0])),
+    backStock: Object.fromEntries(products.map(product => [product.id, product.backstock || 0])),
+    saleFlags: Object.fromEntries(products.map(product => [product.id, product.onSale === true])),
+    salesData: cleanState.sales?.sessions || [],
+    inventoryData: cleanState.inventory || { products: [] },
+    importedSalesFileData: cleanState.sales || { sessions: [], activeSessionId: null },
+    inventoryFileData: cleanState.inventory || { products: [] },
+    productOverrides: cleanState.productOverrides || {},
+    productEdits: cleanState.productOverrides || {},
+    orderRecommendations: cleanState.processing?.recommendations || [],
+    settings: cleanState.settings || {},
+    clientLastSaved: cleanState.lastSaved || null,
+  };
+}
+
+function hydrateStateFromRemote(remoteState, storeNumber) {
+  const base = {
+    ...defaultState(),
+    ...remoteState,
+    storeNumber,
+    productOverrides: remoteState.productOverrides || remoteState.productEdits || {},
+    deletedItems: remoteState.deletedItems || [],
+    skuAliases: remoteState.skuAliases || {},
+    sales: remoteState.sales || remoteState.importedSalesFileData || { sessions: [], activeSessionId: null },
+    processing: remoteState.processing || {
+      matched: [],
+      unmatched: [],
+      deductions: [],
+      recommendations: remoteState.orderRecommendations || [],
+    },
+    settings: {
+      ...defaultState().settings,
+      ...(remoteState.settings || {}),
+    },
+    lastSaved: remoteState.clientLastSaved || remoteState.lastSaved || null,
+  };
+  base.inventory = {
+    products: mergeProductsWithCatalog(
+      remoteState.inventory?.products
+        || remoteState.inventoryData?.products
+        || remoteState.inventoryFileData?.products
+        || [],
+      base,
+    ),
+  };
+  return base;
+}
+
 function bindEvents() {
+  dom.storeSelect.addEventListener("change", event => switchStore(event.target.value));
+  dom.addStoreButton.addEventListener("click", addStore);
   dom.uploadSalesButton.addEventListener("click", () => dom.salesInput.click());
   dom.uploadInventoryButton.addEventListener("click", () => dom.inventoryInput.click());
   dom.salesInput.addEventListener("change", event => handleSalesFile(event.target.files?.[0]));
   dom.inventoryInput.addEventListener("change", event => handleInventoryFile(event.target.files?.[0]));
-  dom.saveProgressButton.addEventListener("click", () => saveState({ showConfirmation: true }));
+  dom.saveProgressButton.addEventListener("click", saveProjectNow);
   dom.exportInventoryButton.addEventListener("click", exportInventoryCsv);
   dom.exportOrdersButton.addEventListener("click", exportOrdersCsv);
   dom.settingsButton.addEventListener("click", () => activateTab("settings"));
   dom.applyDeductionButton.addEventListener("click", applySalesDeduction);
   dom.clearSalesButton.addEventListener("click", clearSalesData);
   dom.clearInventoryButton.addEventListener("click", clearInventoryCounts);
+  dom.clearSaleFlagsButton.addEventListener("click", clearAllSaleFlags);
+  dom.restoreDeletedItemsButton.addEventListener("click", restoreDeletedInventoryItems);
   dom.clearAllButton.addEventListener("click", clearAllLocalData);
   dom.settingsExportInventoryButton.addEventListener("click", exportInventoryCsv);
   dom.settingsExportOrdersButton.addEventListener("click", exportOrdersCsv);
   dom.targetWeeksInput.addEventListener("change", () => {
     state.settings.targetWeeks = Math.max(0.5, Number(dom.targetWeeksInput.value) || DEFAULT_TARGET_WEEKS);
     recalculateRecommendations();
-    saveState({ showConfirmation: true });
+    saveState();
+  });
+  dom.saleOnlyToggle.addEventListener("change", () => {
+    state.settings.showSaleOnly = dom.saleOnlyToggle.checked;
+    render();
+    saveState();
   });
 
   document.querySelectorAll(".tab-button").forEach(button => {
@@ -203,6 +451,111 @@ function bindEvents() {
   dom.inventoryTable.addEventListener("click", handleInventoryClick);
   dom.inventoryTable.addEventListener("change", handleInventoryChange);
   dom.orderingTable.addEventListener("change", handleOrderingChange);
+  window.addEventListener("online", () => {
+    setStatus("Back online. Syncing latest local changes to Firebase.");
+    syncCurrentStoreToFirebase();
+  });
+  window.addEventListener("offline", () => {
+    setSyncStatus("Local only");
+    setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
+  });
+}
+
+async function initializeFirebaseSync() {
+  renderStoreSelector();
+  if (!window.WineFirebaseSync?.ready) {
+    setSyncStatus("Local only");
+    return;
+  }
+  if (!selectedFirebaseStoreNumber()) {
+    setSyncStatus("Local only");
+    return;
+  }
+  try {
+    await window.WineFirebaseSync.ready;
+    await loadSelectedStoreFromFirebase();
+  } catch (error) {
+    setSyncStatus("Firebase save failed");
+    setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
+    console.warn("Firebase initialization failed", error);
+  }
+}
+
+async function addStore() {
+  const storeNumber = cleanText(prompt("Enter store number:"));
+  if (!storeNumber) {
+    showToast("Store number cannot be blank.");
+    return;
+  }
+  if (!storeRegistry.stores.includes(storeNumber)) {
+    storeRegistry.stores.push(storeNumber);
+    storeRegistry.stores.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }
+  currentStoreNumber = storeNumber;
+  storeRegistry.currentStore = storeNumber;
+  saveStoreRegistry();
+  state = loadState(currentStoreNumber);
+  editingProductId = null;
+  render();
+  try {
+    setSyncStatus("Saving to Firebase…");
+    await window.WineFirebaseSync?.createStoreIfMissing?.(storeNumber);
+    await loadSelectedStoreFromFirebase({ createIfMissing: true });
+    showToast(`Store ${storeNumber} selected.`);
+  } catch (error) {
+    setSyncStatus("Firebase save failed");
+    setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
+    console.warn("Add store Firebase setup failed", error);
+  }
+}
+
+async function switchStore(storeNumber) {
+  const nextStore = cleanText(storeNumber) || DEFAULT_STORE_NUMBER;
+  if (nextStore === currentStoreNumber) return;
+  isSwitchingStore = true;
+  clearTimeout(saveTimer);
+  clearTimeout(firebaseSaveTimer);
+  currentStoreNumber = nextStore;
+  storeRegistry.currentStore = nextStore;
+  if (!storeRegistry.stores.includes(nextStore)) storeRegistry.stores.push(nextStore);
+  saveStoreRegistry();
+  state = loadState(currentStoreNumber);
+  editingProductId = null;
+  render();
+  isSwitchingStore = false;
+  await loadSelectedStoreFromFirebase();
+}
+
+async function loadSelectedStoreFromFirebase({ createIfMissing = false } = {}) {
+  const storeNumber = selectedFirebaseStoreNumber();
+  if (!storeNumber) {
+    setSyncStatus("Local only");
+    return;
+  }
+  if (!window.WineFirebaseSync?.getStoreState) {
+    setSyncStatus("Local only");
+    return;
+  }
+  try {
+    const remoteState = await window.WineFirebaseSync.getStoreState(storeNumber);
+    if (storeNumber !== currentStoreNumber) return;
+    if (remoteState) {
+      state = hydrateStateFromRemote(remoteState, storeNumber);
+      localStorage.setItem(storageKeyForStore(storeNumber), JSON.stringify(state));
+      render();
+      setSyncStatus("Synced to Firebase");
+      setStatus(`Store ${storeNumber} loaded from Firebase.`);
+      return;
+    }
+    if (createIfMissing) await window.WineFirebaseSync.createStoreIfMissing(storeNumber);
+    await syncCurrentStoreToFirebase();
+  } catch (error) {
+    if (storeNumber === currentStoreNumber) {
+      setSyncStatus("Firebase save failed");
+      setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
+    }
+    console.warn("Firebase store load failed", error);
+  }
 }
 
 async function handleInventoryFile(file) {
@@ -211,25 +564,10 @@ async function handleInventoryFile(file) {
     setStatus(`Reading ${file.name}...`);
     const rows = await parseFileRows(file);
     const imported = parseInventoryRows(rows);
-    const existingById = new Map(state.inventory.products.map(product => [product.id, product]));
-    const now = new Date().toISOString();
-
-    const merged = imported.map(product => {
-      const existing = existingById.get(product.id);
-      return {
-        ...product,
-        quantity: product.quantity ?? existing?.quantity ?? 0,
-        originalQuantity: product.quantity ?? existing?.originalQuantity ?? existing?.quantity ?? 0,
-        backstock: product.backstock ?? existing?.backstock ?? 0,
-        originalBackstock: product.backstock ?? existing?.originalBackstock ?? existing?.backstock ?? 0,
-        lastUpdated: existing?.lastUpdated || now,
-        notes: existing?.notes || "",
-        overrideCases: existing?.overrideCases ?? "",
-        onSale: existing?.onSale || false,
-      };
-    });
-
-    state.inventory.products = sortProducts(merged);
+    state.inventory.products = mergeProductsWithCatalog([
+      ...state.inventory.products,
+      ...imported,
+    ]);
     recalculateRecommendations();
     saveState();
     setStatus(`Loaded ${imported.length} inventory products from ${file.name}.`);
@@ -274,13 +612,13 @@ async function handleSalesFile(file) {
 function parseInventoryRows(rows) {
   if (!rows.length) throw new Error("Inventory file is empty.");
   const header = rows[0].map(cell => String(cell || "").trim());
-  const upcIndex = findColumn(header, ["jde/upc", "jde upc", "jde", "upc", "sku / id", "sku/id", "id", "barcode", "product code"]);
-  const descriptionIndex = findColumn(header, ["description", "product", "product name", "name", "item description"]);
+  const upcIndex = findColumn(header, SKU_HEADER_ALIASES);
+  const descriptionIndex = findColumn(header, ["description", "product", "product name", "name", "item description", "item"]);
   const quantityIndex = findColumn(header, ["quantity", "front", "front units", "front of house", "front - units"]);
   const backstockIndex = findColumn(header, ["backstock", "backstock cases", "back of house", "back - cases"]);
 
-  if (upcIndex < 0) throw new Error("Inventory file is missing a JDE/UPC column.");
-  if (descriptionIndex < 0) throw new Error("Inventory file is missing a Description column.");
+  if (upcIndex < 0) throw new Error(`Could not find JDE/UPC column. Detected columns: ${detectedHeaderSummary(header)}`);
+  if (descriptionIndex < 0) throw new Error(`Could not find Description column. Detected columns: ${detectedHeaderSummary(header)}`);
 
   const products = [];
   const seen = new Set();
@@ -295,10 +633,10 @@ function parseInventoryRows(rows) {
     products.push({
       id,
       name: name || "Unnamed product",
-      quantity: parseWholeNumber(row[quantityIndex]),
-      originalQuantity: parseWholeNumber(row[quantityIndex]),
-      backstock: parseWholeNumber(row[backstockIndex]),
-      originalBackstock: parseWholeNumber(row[backstockIndex]),
+      quantity: quantityIndex >= 0 ? parseWholeNumber(row[quantityIndex]) : undefined,
+      originalQuantity: quantityIndex >= 0 ? parseWholeNumber(row[quantityIndex]) : undefined,
+      backstock: backstockIndex >= 0 ? parseWholeNumber(row[backstockIndex]) : undefined,
+      originalBackstock: backstockIndex >= 0 ? parseWholeNumber(row[backstockIndex]) : undefined,
       lastUpdated: new Date().toISOString(),
       notes: "",
       overrideCases: "",
@@ -312,11 +650,12 @@ function parseInventoryRows(rows) {
 function parseSalesRows(rows) {
   if (!rows.length) throw new Error("Sales file is empty.");
   const header = rows[0].map(cell => String(cell || "").trim());
-  const upcIndex = columnOrFallback(header, ["jde/upc", "jde upc", "jde", "upc", "sku / id", "sku/id", "barcode", "product code"], 1);
-  const descriptionIndex = columnOrFallback(header, ["description", "product", "product name", "name", "item description"], 1);
-  const packIndex = columnOrFallback(header, ["pack", "size", "package", "description"], 2);
+  const upcIndex = findColumn(header, SKU_HEADER_ALIASES);
+  const descriptionIndex = columnOrFallback(header, ["description", "product", "product name", "name", "item description", "item"], 2);
+  const packIndex = columnOrFallback(header, ["pack", "size", "package", "sub brand", "description", "item"], 3);
   const unitsIndex = columnOrFallback(header, ["units sold", "units", "quantity sold", "sold"], 4);
-  if (unitsIndex < 0) throw new Error("Sales file is missing a Units Sold column.");
+  if (upcIndex < 0) throw new Error(`Could not find JDE/UPC column. Detected columns: ${detectedHeaderSummary(header)}`);
+  if (unitsIndex < 0) throw new Error(`Could not find Units column. Detected columns: ${detectedHeaderSummary(header)}`);
 
   const salesRows = [];
   for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
@@ -345,18 +684,26 @@ function parseSalesRows(rows) {
 }
 
 function processSalesRows(salesRows) {
-  const productById = new Map(state.inventory.products.map(product => [product.id, product]));
+  const productById = new Map(
+    state.inventory.products
+      .filter(product => productCategoryInfo(product))
+      .flatMap(product => {
+        const keys = new Set([product.id, product.sourceSku, resolveSku(product.sourceSku)]);
+        return [...keys].filter(Boolean).map(key => [normalizeUpc(key), product]);
+      }),
+  );
   const salesById = new Map();
   const unmatched = [];
 
   for (const row of salesRows) {
-    const product = productById.get(row.id);
-    if (!row.id || !product) {
+    const resolvedId = resolveSku(row.id);
+    const product = productById.get(resolvedId);
+    if (!resolvedId || !product) {
       unmatched.push({ ...row, status: "Unmatched", reason: "No inventory JDE/UPC match" });
       continue;
     }
-    const current = salesById.get(row.id) || {
-      id: row.id,
+    const current = salesById.get(product.id) || {
+      id: product.id,
       unitsSold: 0,
       unitsPerCase: row.unitsPerCase || parseCaseSize(`${product.name}`),
       description: product.name || row.description,
@@ -366,7 +713,7 @@ function processSalesRows(salesRows) {
     current.unitsSold += Number(row.unitsSold || 0);
     current.unitsPerCase = current.unitsPerCase || row.unitsPerCase || parseCaseSize(`${product.name} ${row.pack}`);
     current.rows.push(row.rowNumber);
-    salesById.set(row.id, current);
+    salesById.set(product.id, current);
   }
 
   state.processing.matched = [...salesById.values()];
@@ -377,7 +724,7 @@ function processSalesRows(salesRows) {
 function recalculateRecommendations() {
   const salesById = new Map(state.processing.matched.map(item => [item.id, item]));
   state.processing.recommendations = sortProducts(state.inventory.products)
-    .filter(product => categoryByUpc.has(product.id))
+    .filter(product => productCategoryInfo(product))
     .map(product => {
       const sales = salesById.get(product.id);
       const unitsSold = sales?.unitsSold ?? 0;
@@ -421,7 +768,9 @@ async function parseFileRows(file) {
     throw new Error("Invalid format. Upload an XLSX or CSV file.");
   }
   if (!window.XLSX) {
-    throw new Error("The XLSX parser did not load. Refresh the page and try again.");
+    throw new Error(
+      "XLSX support is not loaded. The app needs the SheetJS xlsx.full.min.js file to read Excel files. Make sure xlsx.full.min.js is included in the project and loaded before app.js.",
+    );
   }
   const bytes = await file.arrayBuffer();
   const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
@@ -464,8 +813,11 @@ function parseCsv(text) {
 }
 
 function render() {
+  renderStoreSelector();
+  renderSyncStatus();
   renderLastSaved();
   dom.targetWeeksInput.value = state.settings.targetWeeks;
+  dom.saleOnlyToggle.checked = state.settings.showSaleOnly === true;
   renderInventorySummary();
   renderOrderingSummary();
   renderInventoryTable();
@@ -473,18 +825,32 @@ function render() {
   renderUnmatched();
 }
 
+function renderStoreSelector() {
+  dom.storeSelect.innerHTML = storeRegistry.stores
+    .map(storeNumber => `<option value="${escapeHtml(storeNumber)}" ${storeNumber === currentStoreNumber ? "selected" : ""}>${escapeHtml(storeNumber)}</option>`)
+    .join("");
+  dom.currentStoreText.textContent = `Current store: ${currentStoreNumber}`;
+}
+
+function renderSyncStatus() {
+  dom.syncStatusText.textContent = syncStatus;
+  dom.syncStatusText.className = `sync-status ${syncStatusClass(syncStatus)}`;
+}
+
 function renderLastSaved() {
   dom.lastSavedText.textContent = state.lastSaved ? formatDateTime(state.lastSaved) : "Never";
 }
 
 function renderInventorySummary() {
-  const visible = state.inventory.products.filter(product => categoryByUpc.has(product.id));
+  const visible = state.inventory.products.filter(product => productCategoryInfo(product));
+  const unknown = state.inventory.products.filter(product => !productCategoryInfo(product));
   const totalFront = visible.reduce((sum, product) => sum + Number(product.quantity || 0), 0);
   const totalBack = visible.reduce((sum, product) => sum + Number(product.backstock || 0), 0);
   dom.inventorySummary.innerHTML = [
     metric("Products", visible.length),
     metric("Front Units", totalFront),
     metric("Backstock Cases", totalBack),
+    metric("Unmatched Products", unknown.length),
   ].join("");
 }
 
@@ -503,39 +869,73 @@ function renderOrderingSummary() {
 }
 
 function renderInventoryTable() {
-  const visibleProducts = sortProducts(state.inventory.products).filter(product => categoryByUpc.has(product.id));
-  if (!visibleProducts.length) {
-    dom.inventoryTable.innerHTML = `<div class="empty-state">Upload an inventory file with JDE/UPC and Description columns.</div>`;
-    return;
-  }
+  const sortedProducts = sortProducts(state.inventory.products);
+  const filteredProducts = state.settings.showSaleOnly
+    ? sortedProducts.filter(product => product.onSale)
+    : sortedProducts;
+  const visibleProducts = filteredProducts.filter(product => productCategoryInfo(product));
+  const unknownProducts = filteredProducts.filter(product => !productCategoryInfo(product));
 
   let html = `<table><thead><tr>
     <th>JDE/UPC</th><th>Description</th><th class="center-cell">Front</th>
-    <th class="center-cell">Backstock</th><th>Notes</th><th class="center-cell">Sale</th>
+    <th class="center-cell">Backstock</th><th>Notes</th><th class="center-cell">Sale</th><th class="center-cell">Actions</th>
   </tr></thead><tbody>`;
   for (const section of CATEGORY_CONFIG) {
-    const products = visibleProducts.filter(product => categoryByUpc.get(product.id)?.name === section.name);
+    const products = visibleProducts.filter(product => productCategoryInfo(product)?.name === section.name);
     if (!products.length) continue;
-    html += `<tr class="category-row"><td colspan="6">${escapeHtml(section.name)}</td></tr>`;
+    html += `<tr class="category-row"><td colspan="7">${escapeHtml(section.name)}</td></tr>`;
     for (const product of products) {
-      html += `<tr data-id="${escapeHtml(product.id)}">
-        <td>${escapeHtml(product.id)}</td>
-        <td class="desc-cell" title="${escapeHtml(product.name)}">${escapeHtml(product.name)}</td>
-        <td class="number-cell">${quantityControl(product.id, "quantity", product.quantity || 0)}</td>
-        <td class="number-cell">${quantityControl(product.id, "backstock", product.backstock || 0)}</td>
-        <td><input class="notes-input" data-field="notes" data-id="${escapeHtml(product.id)}" value="${escapeHtml(product.notes || "")}" /></td>
-        <td class="center-cell"><input type="checkbox" data-field="onSale" data-id="${escapeHtml(product.id)}" ${product.onSale ? "checked" : ""} /></td>
-      </tr>`;
+      html += inventoryRowHtml(product);
+    }
+  }
+  if (unknownProducts.length) {
+    html += `<tr class="category-row"><td colspan="7">Unmatched Products</td></tr>`;
+    for (const product of unknownProducts) {
+      html += inventoryRowHtml(product);
     }
   }
   html += "</tbody></table>";
   dom.inventoryTable.innerHTML = html;
 }
 
+function inventoryRowHtml(product) {
+  const isEditing = editingProductId === product.id;
+  const rowTitle = product.onSale ? "This item is currently marked as on sale." : "";
+  if (isEditing) {
+    return `<tr class="${product.onSale ? "sale-item-row" : ""}" data-id="${escapeHtml(product.id)}" title="${rowTitle}">
+      <td><input class="edit-input sku-edit-input" data-edit-field="sku" data-id="${escapeHtml(product.id)}" value="${escapeHtml(product.id)}" /></td>
+      <td><input class="edit-input description-edit-input" data-edit-field="description" data-id="${escapeHtml(product.id)}" value="${escapeHtml(product.name)}" /></td>
+      <td class="number-cell">${quantityControl(product.id, "quantity", product.quantity || 0)}</td>
+      <td class="number-cell">${quantityControl(product.id, "backstock", product.backstock || 0)}</td>
+      <td><input class="notes-input" data-field="notes" data-id="${escapeHtml(product.id)}" value="${escapeHtml(product.notes || "")}" /></td>
+      <td class="center-cell"><input type="checkbox" data-field="onSale" data-id="${escapeHtml(product.id)}" ${product.onSale ? "checked" : ""} title="This item is currently marked as on sale." /></td>
+      <td class="center-cell row-actions">
+        <button class="action-button save-action" data-action="saveEdit" data-id="${escapeHtml(product.id)}" title="Save product edits">Save</button>
+        <button class="action-button" data-action="cancelEdit" data-id="${escapeHtml(product.id)}" title="Cancel product edits">Cancel</button>
+      </td>
+    </tr>`;
+  }
+
+  return `<tr class="${product.onSale ? "sale-item-row" : ""}" data-id="${escapeHtml(product.id)}" title="${rowTitle}">
+    <td>${escapeHtml(product.id)}</td>
+    <td class="desc-cell product-name-cell" title="${escapeHtml(product.name)}">${escapeHtml(product.name)}${saleBadge(product)}</td>
+    <td class="number-cell">${quantityControl(product.id, "quantity", product.quantity || 0)}</td>
+    <td class="number-cell">${quantityControl(product.id, "backstock", product.backstock || 0)}</td>
+    <td><input class="notes-input" data-field="notes" data-id="${escapeHtml(product.id)}" value="${escapeHtml(product.notes || "")}" /></td>
+    <td class="center-cell"><input type="checkbox" data-field="onSale" data-id="${escapeHtml(product.id)}" ${product.onSale ? "checked" : ""} title="This item is currently marked as on sale." /></td>
+    <td class="center-cell row-actions">
+      <button class="icon-action" data-action="editProduct" data-id="${escapeHtml(product.id)}" title="Edit SKU and description" aria-label="Edit ${escapeHtml(product.name)}">&#9998;</button>
+      <button class="icon-action danger-icon" data-action="deleteProduct" data-id="${escapeHtml(product.id)}" title="Delete inventory item" aria-label="Delete ${escapeHtml(product.name)}">&#128465;</button>
+    </td>
+  </tr>`;
+}
+
 function renderOrderingTable() {
-  const recommendations = state.processing.recommendations || [];
+  const recommendations = state.settings.showSaleOnly
+    ? (state.processing.recommendations || []).filter(item => getProduct(item.id)?.onSale)
+    : state.processing.recommendations || [];
   if (!recommendations.length) {
-    dom.orderingTable.innerHTML = `<div class="empty-state">Upload sales and inventory files to calculate order recommendations.</div>`;
+    dom.orderingTable.innerHTML = `<div class="empty-state">Upload a sales file to calculate order recommendations from the built-in catalog.</div>`;
     dom.applyDeductionButton.disabled = true;
     dom.deductionStatus.textContent = "";
     return;
@@ -555,14 +955,15 @@ function renderOrderingTable() {
     <th class="center-cell">Override</th><th>Status</th><th>Notes</th>
   </tr></thead><tbody>`;
   for (const section of CATEGORY_CONFIG) {
-    const rows = recommendations.filter(item => categoryByUpc.get(item.id)?.name === section.name);
+    const rows = recommendations.filter(item => productCategoryInfo(getProduct(item.id) || item)?.name === section.name);
     if (!rows.length) continue;
     html += `<tr class="category-row"><td colspan="10">${escapeHtml(section.name)}</td></tr>`;
     for (const item of rows) {
       const statusClass = item.status === "Order Needed" ? "status-order" : "status-ok";
-      html += `<tr data-id="${escapeHtml(item.id)}">
+      const onSale = getProduct(item.id)?.onSale === true;
+      html += `<tr class="${onSale ? "sale-item-row" : ""}" data-id="${escapeHtml(item.id)}" title="${onSale ? "This item is currently marked as on sale." : ""}">
         <td>${escapeHtml(item.id)}</td>
-        <td class="desc-cell" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</td>
+        <td class="desc-cell product-name-cell" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}${onSale ? saleBadge({ onSale: true }) : ""}</td>
         <td class="number-cell">${formatNumber(item.unitsSold)}</td>
         <td class="number-cell">${formatNumber(item.totalUnitsOnHand)}</td>
         <td class="number-cell">${item.weeksOfProduct == null ? "N/A" : item.weeksOfProduct.toFixed(1)}</td>
@@ -579,7 +980,7 @@ function renderOrderingTable() {
 }
 
 function renderUnmatched() {
-  const unmatched = state.processing.unmatched || [];
+  const unmatched = state.settings.showSaleOnly ? [] : state.processing.unmatched || [];
   if (!unmatched.length) {
     dom.unmatchedList.innerHTML = `<div class="small-muted">No unmatched rows.</div>`;
     return;
@@ -599,6 +1000,24 @@ function handleInventoryClick(event) {
   if (!button) return;
   const product = getProduct(button.dataset.id);
   if (!product) return;
+  if (button.dataset.action === "editProduct") {
+    editingProductId = product.id;
+    renderInventoryTable();
+    return;
+  }
+  if (button.dataset.action === "cancelEdit") {
+    editingProductId = null;
+    renderInventoryTable();
+    return;
+  }
+  if (button.dataset.action === "saveEdit") {
+    saveProductEdit(product);
+    return;
+  }
+  if (button.dataset.action === "deleteProduct") {
+    deleteInventoryItem(product);
+    return;
+  }
   const field = button.dataset.field;
   const delta = Number(button.dataset.delta);
   product[field] = Math.max(0, Number(product[field] || 0) + delta);
@@ -624,6 +1043,119 @@ function handleInventoryChange(event) {
   product.lastUpdated = new Date().toISOString();
   recalculateRecommendations();
   scheduleSave();
+}
+
+function saveProductEdit(product) {
+  const sourceSku = product.sourceSku || product.id;
+  const skuInput = dom.inventoryTable.querySelector(`input[data-edit-field="sku"][data-id="${cssEscape(product.id)}"]`);
+  const descriptionInput = dom.inventoryTable.querySelector(`input[data-edit-field="description"][data-id="${cssEscape(product.id)}"]`);
+  const newSku = normalizeUpc(skuInput?.value || "");
+  const newDescription = cleanText(descriptionInput?.value || "");
+  if (!newSku) {
+    showToast("Enter a SKU/JDE/UPC before saving.");
+    return;
+  }
+  if (!newDescription) {
+    showToast("Enter a product description before saving.");
+    return;
+  }
+  if (skuExistsOnAnotherProduct(newSku, sourceSku)) {
+    showToast("That SKU already exists. Please use a different SKU.");
+    return;
+  }
+
+  const oldSku = product.id;
+  state.productOverrides[sourceSku] = {
+    sku: newSku,
+    description: newDescription,
+  };
+  if (newSku !== sourceSku) {
+    state.skuAliases[sourceSku] = newSku;
+    state.skuAliases[oldSku] = newSku;
+  } else {
+    delete state.skuAliases[sourceSku];
+    delete state.skuAliases[oldSku];
+  }
+  moveProcessingSku(oldSku, newSku);
+  editingProductId = null;
+  state.inventory.products = mergeProductsWithCatalog(state.inventory.products, state);
+  refreshProcessingFromActiveSales();
+  saveState();
+  setStatus(`Updated ${newSku}.`);
+  showToast("Product saved.");
+}
+
+function deleteInventoryItem(product) {
+  if (!confirm("Are you sure you want to delete this inventory item? This cannot be undone.")) return;
+  const sourceSku = product.sourceSku || product.id;
+  state.deletedItems = [...new Set([...(state.deletedItems || []), sourceSku].map(normalizeUpc))];
+  delete state.productOverrides[sourceSku];
+  const deleteKeys = [sourceSku, product.id].map(normalizeUpc);
+  for (const [aliasFrom, aliasTo] of Object.entries(state.skuAliases || {})) {
+    const from = normalizeUpc(aliasFrom);
+    const to = normalizeUpc(aliasTo);
+    if (deleteKeys.includes(from) || deleteKeys.includes(to)) {
+      delete state.skuAliases[aliasFrom];
+    }
+  }
+  state.inventory.products = state.inventory.products.filter(item => {
+    const itemSource = item.sourceSku || item.id;
+    return item.id !== product.id && itemSource !== sourceSku;
+  });
+  state.processing.matched = (state.processing.matched || []).filter(item => item.id !== product.id && item.id !== sourceSku);
+  state.processing.recommendations = (state.processing.recommendations || []).filter(item => item.id !== product.id && item.id !== sourceSku);
+  editingProductId = null;
+  state.inventory.products = mergeProductsWithCatalog(state.inventory.products, state);
+  refreshProcessingFromActiveSales();
+  saveState();
+  setStatus(`Deleted ${product.id}.`);
+  showToast("Inventory item deleted.");
+}
+
+function restoreDeletedInventoryItems() {
+  if (!state.deletedItems?.length) {
+    showToast("There are no deleted built-in items to restore.");
+    return;
+  }
+  if (!confirm("Restore deleted built-in inventory items? Saved counts for current visible products will be kept.")) return;
+  state.deletedItems = [];
+  state.inventory.products = mergeProductsWithCatalog(state.inventory.products, state);
+  refreshProcessingFromActiveSales();
+  saveState();
+  setStatus("Deleted inventory items restored.");
+  showToast("Deleted inventory items restored.");
+}
+
+function skuExistsOnAnotherProduct(sku, currentSourceSku) {
+  const normalizedSku = normalizeUpc(sku);
+  const normalizedSource = normalizeUpc(currentSourceSku);
+  const catalogProduct = skuToProductMap.get(normalizedSku);
+  if (catalogProduct && normalizeUpc(catalogProduct.sku) !== normalizedSource) return true;
+  return state.inventory.products.some(product => {
+    const productSource = normalizeUpc(product.sourceSku || product.id);
+    if (productSource === normalizedSource) return false;
+    return normalizeUpc(product.id) === normalizedSku || productSource === normalizedSku;
+  });
+}
+
+function moveProcessingSku(oldSku, newSku) {
+  const oldNormalized = normalizeUpc(oldSku);
+  const newNormalized = normalizeUpc(newSku);
+  for (const collectionName of ["matched", "unmatched", "recommendations"]) {
+    state.processing[collectionName] = (state.processing[collectionName] || []).map(item => {
+      if (normalizeUpc(item.id) !== oldNormalized) return item;
+      return { ...item, id: newNormalized };
+    });
+  }
+}
+
+function refreshProcessingFromActiveSales() {
+  const active = state.sales.sessions.find(session => session.id === state.sales.activeSessionId);
+  if (active?.salesRows?.length) {
+    processSalesRows(active.salesRows);
+    return;
+  }
+  recalculateRecommendations();
 }
 
 function handleOrderingChange(event) {
@@ -703,13 +1235,27 @@ function clearInventoryCounts() {
   showToast("Inventory count data cleared.");
 }
 
+function clearAllSaleFlags() {
+  if (!confirm("Clear all On Sale flags? Inventory counts and sales data will not be changed.")) return;
+  for (const product of state.inventory.products) {
+    product.onSale = false;
+    product.lastUpdated = new Date().toISOString();
+  }
+  state.settings.showSaleOnly = false;
+  recalculateRecommendations();
+  saveState();
+  setStatus("All sale flags cleared.");
+  showToast("Sale flags cleared.");
+}
+
 function clearAllLocalData() {
-  if (!confirm("Clear all saved local data for this browser? This cannot be undone.")) return;
-  localStorage.removeItem(STORAGE_KEY);
+  if (!confirm(`Clear all saved data for Store ${currentStoreNumber}? This will also sync the cleared state to Firebase when available.`)) return;
+  localStorage.removeItem(storageKeyForStore(currentStoreNumber));
   state = defaultState();
   render();
-  setStatus("All local data cleared.");
-  showToast("All local data cleared.");
+  saveState();
+  setStatus(`Store ${currentStoreNumber} data cleared.`);
+  showToast("Store data cleared.");
 }
 
 function exportInventoryCsv() {
@@ -768,22 +1314,70 @@ function quantityControl(id, field, value) {
   </span>`;
 }
 
+function saleBadge(item) {
+  return item?.onSale ? ` <span class="sale-badge">ON SALE</span>` : "";
+}
+
 function sortProducts(products) {
   return [...products].sort((a, b) => {
-    const aKey = orderByUpc.get(a.id) || "99:999";
-    const bKey = orderByUpc.get(b.id) || "99:999";
-    if (aKey !== bKey) return aKey.localeCompare(bKey);
+    const aOrder = productCategoryInfo(a);
+    const bOrder = productCategoryInfo(b);
+    const aCategory = aOrder?.categoryIndex ?? 99;
+    const bCategory = bOrder?.categoryIndex ?? 99;
+    if (aCategory !== bCategory) return aCategory - bCategory;
+    const aItem = aOrder?.itemIndex ?? 9999;
+    const bItem = bOrder?.itemIndex ?? 9999;
+    if (aItem !== bItem) return aItem - bItem;
     return (a.name || "").localeCompare(b.name || "");
   });
 }
 
 function getProduct(id) {
-  return state.inventory.products.find(product => product.id === id);
+  const normalized = normalizeUpc(id);
+  return state.inventory.products.find(product => normalizeUpc(product.id) === normalized);
+}
+
+function productCategoryInfo(productOrId) {
+  if (!productOrId) return null;
+  const directId = typeof productOrId === "object"
+    ? normalizeUpc(productOrId.id)
+    : normalizeUpc(productOrId);
+  const sourceSku = typeof productOrId === "object"
+    ? normalizeUpc(productOrId.sourceSku || productOrId.id)
+    : directId;
+  const fixed = fixedProductOrderIndex.get(sourceSku) || fixedProductOrderIndex.get(directId);
+  if (fixed) {
+    return {
+      name: fixed.category,
+      categoryIndex: fixed.categoryIndex,
+      itemIndex: fixed.itemIndex,
+      globalIndex: fixed.globalIndex,
+    };
+  }
+  return categoryByUpc.get(sourceSku) || categoryByUpc.get(directId) || null;
+}
+
+function resolveSku(value) {
+  const sku = normalizeUpc(value);
+  if (!sku) return "";
+  const alias = normalizeUpc(state.skuAliases?.[sku]);
+  if (alias) return alias;
+  const override = state.productOverrides?.[sku];
+  if (override?.sku) return normalizeUpc(override.sku);
+  return sku;
+}
+
+function cssEscape(value) {
+  if (window.CSS?.escape) return CSS.escape(String(value));
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
 function findColumn(header, aliases) {
-  const normalized = header.map(normalizeHeader);
-  return normalized.findIndex(value => aliases.map(normalizeHeader).includes(value));
+  const normalizedAliases = aliases.flatMap(headerVariants);
+  return header.findIndex(value => {
+    const variants = headerVariants(value);
+    return variants.some(variant => normalizedAliases.includes(variant));
+  });
 }
 
 function columnOrFallback(header, aliases, fallback) {
@@ -792,7 +1386,29 @@ function columnOrFallback(header, aliases, fallback) {
 }
 
 function normalizeHeader(value) {
-  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/#/g, "")
+    .replace(/[\/\-_]+/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactHeader(value) {
+  return normalizeHeader(value).replace(/\s+/g, "");
+}
+
+function headerVariants(value) {
+  return [normalizeHeader(value), compactHeader(value)].filter(Boolean);
+}
+
+function detectedHeaderSummary(header) {
+  const detected = header.map(cleanText).filter(Boolean);
+  if (!detected.length) return "none";
+  const preview = detected.slice(0, 12).join(", ");
+  return detected.length > 12 ? `${preview}...` : preview;
 }
 
 function normalizeUpc(value) {
@@ -845,6 +1461,18 @@ function metric(label, value) {
 function setStatus(message, isError = false) {
   dom.statusBanner.textContent = message;
   dom.statusBanner.classList.toggle("error", isError);
+}
+
+function setSyncStatus(message) {
+  syncStatus = message;
+  renderSyncStatus();
+}
+
+function syncStatusClass(message) {
+  if (message === "Synced to Firebase") return "synced";
+  if (message === "Saving to Firebase…") return "syncing";
+  if (message === "Firebase save failed") return "error";
+  return "local";
 }
 
 function showToast(message) {
@@ -916,3 +1544,6 @@ function registerServiceWorker() {
     });
   });
 }
+
+
+

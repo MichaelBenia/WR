@@ -5,25 +5,67 @@ This folder contains a standalone HTML/CSS/JavaScript version of Wine Order Coun
 ## Files
 
 - `index.html` - app shell
+- `catalog.js` - built-in curated product catalog and fixed category/order mapping
 - `styles.css` - purple themed UI
+- `firebase-config.js` - Firebase App and Firestore browser sync adapter
 - `app.js` - local storage, XLSX/CSV import, ordering logic, CSV export
 - `service-worker.js` - basic offline cache
-- `vendor/xlsx.full.min.js` - local SheetJS build for browser XLSX parsing
+- `firestore.rules` - testing-only Firestore rules example
+- `xlsx.full.min.js` - local SheetJS build for browser XLSX parsing
+
+`index.html` loads `xlsx.full.min.js` before `app.js`. If the local file is missing, it attempts a CDN fallback from jsDelivr. For restricted work laptops, keep `xlsx.full.min.js` beside `index.html` so XLSX uploads work without relying on the CDN.
 
 ## What Runs Locally
 
-The app has no backend, no Firebase, no login, and no database. Uploaded files are parsed in the browser and saved data stays in `localStorage` on the same browser/device.
+The app runs as a static GitHub Pages site. Uploaded files are parsed in the browser. Data is saved locally first, then synced to Firebase Firestore under the selected store number when Firebase is available.
 
 Saved locally:
 
+- built-in catalog inventory counts and edits
 - inventory products
+- edited SKU/description overrides
+- deleted built-in item hide-list
+- old-to-new SKU aliases for matching edited items
 - Front unit counts
 - Backstock case counts
 - notes and order overrides
+- on-sale flags and the Show Only Sale Items filter
 - uploaded sales sessions
 - matched and unmatched sales rows
 - deduction history
 - settings
+
+## Firebase Sync
+
+Use the **Store** dropdown at the top of the app to choose the active store number. All inventory counts, sales sessions, product edits, deleted items, sale flags, recommendations, deductions, and settings are saved under:
+
+```text
+stores/{storeNumber}/data/appState
+```
+
+The app also keeps a per-store browser cache:
+
+```text
+wine-order-count-static-v1_store_{storeNumber}
+```
+
+If Firebase is unavailable, the app continues in local mode and syncs again when the browser comes back online.
+
+The **Save Progress** button now writes a local backup first and then waits for the Firestore write to finish. A successful manual save shows **Project saved to Firebase**. If Firestore is unavailable or rejects the write, the app keeps the local backup and shows **Firebase save failed. Project saved locally only.**
+
+### Firestore Testing Rules
+
+These rules are for personal testing only. They are public and unauthenticated, so they are not safe for production or public sharing. Add Firebase Authentication before sharing the app widely.
+
+```text
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /stores/{storeNumber}/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
+```
 
 ## Publish on GitHub Pages
 
@@ -60,6 +102,9 @@ http://localhost:8080
 ```
 
 ## Import Expectations
+
+The app includes the curated product catalog automatically. Inventory file import is optional and is used to merge count data into matching catalog products.
+Inventory rows can also be edited or deleted directly in the app. Deleted built-in catalog items are hidden locally, not removed from the source code, and can be restored from **Settings > Restore Deleted Inventory Items**.
 
 Inventory files should include headers like:
 

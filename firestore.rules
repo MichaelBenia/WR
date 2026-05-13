@@ -1,0 +1,10 @@
+// Testing only. These unauthenticated rules are not safe for production or
+// public sharing. Add Firebase Authentication and tighten access before using
+// this app outside personal/testing workflows.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /stores/{storeNumber}/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -11,18 +11,29 @@
     <div class="app-shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">Local browser app</p>
+          <p class="eyebrow">Store-synced browser app</p>
           <h1>Wine Order Count</h1>
           <p class="subtitle">
             Import sales and inventory files, count stock, review order needs,
-            and export everything without a backend.
+            and sync each store through Firebase.
           </p>
         </div>
         <div class="save-card">
           <span>Last saved</span>
           <strong id="lastSavedText">Never</strong>
+          <small id="syncStatusText">Local only</small>
         </div>
       </header>
+
+      <section class="store-bar card" aria-label="Store selector">
+        <label for="storeSelect">Store</label>
+        <select id="storeSelect"></select>
+        <button id="addStoreButton" class="secondary-button">Add Store</button>
+        <span id="currentStoreText" class="small-muted">Current store: default</span>
+        <button id="settingsButton" class="ghost-button settings-gear" title="Settings" aria-label="Open settings">
+          &#9881;
+        </button>
+      </section>
 
       <section class="toolbar card">
         <input id="salesFileInput" type="file" accept=".xlsx,.csv" hidden />
@@ -42,11 +53,14 @@
         <button id="exportOrdersButton" class="secondary-button">
           Export Order List
         </button>
-        <button id="settingsButton" class="ghost-button">Settings</button>
+        <label class="toolbar-toggle" title="Show only products currently marked as on sale.">
+          <input id="saleOnlyToggle" type="checkbox" />
+          Show Only Sale Items
+        </label>
       </section>
 
       <div id="statusBanner" class="status-banner" role="status">
-        Load an inventory file to begin.
+        Built-in product catalog loaded. Upload a sales file or inventory count file when ready.
       </div>
 
       <nav class="tabs" aria-label="Main sections">
@@ -102,6 +116,12 @@
               <button id="clearInventoryButton" class="secondary-button danger">
                 Clear inventory count data
               </button>
+              <button id="clearSaleFlagsButton" class="secondary-button danger">
+                Clear All Sale Flags
+              </button>
+              <button id="restoreDeletedItemsButton" class="secondary-button">
+                Restore Deleted Inventory Items
+              </button>
               <button id="clearAllButton" class="secondary-button danger">
                 Clear all saved local data
               </button>
@@ -125,7 +145,7 @@
                 <input id="targetWeeksInput" type="number" min="0.5" step="0.5" />
               </label>
               <p class="small-muted">
-                Saved locally in this browser only. No cloud sync is used.
+                Saved locally first, then synced to Firebase for the selected store.
               </p>
             </section>
           </div>
@@ -135,7 +155,16 @@
 
     <div id="toast" class="toast" aria-live="polite"></div>
 
-    <script src="vendor/xlsx.full.min.js"></script>
+    <script src="xlsx.full.min.js"></script>
+    <script>
+      if (!window.XLSX) {
+        document.write(
+          '<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"><\\/script>',
+        );
+      }
+    </script>
+    <script src="catalog.js"></script>
+    <script src="firebase-config.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -1,10 +1,12 @@
-const CACHE_NAME = "wine-order-count-static-v1";
+const CACHE_NAME = "wine-order-count-static-v4";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
+  "./catalog.js",
+  "./firebase-config.js",
   "./app.js",
-  "./vendor/xlsx.full.min.js",
+  "./xlsx.full.min.js",
 ];
 
 self.addEventListener("install", event => {
