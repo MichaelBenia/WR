@@ -1,7 +1,11 @@
 ﻿const STORAGE_KEY = "wine-order-count-static-v1";
+const STORE_STORAGE_PREFIX = "wineAppState_store";
 const STORE_REGISTRY_KEY = "wine-order-count-store-registry-v1";
+const DEFAULT_STORE_KEY = "defaultStoreNumber";
 const DEFAULT_STORE_NUMBER = "default";
-const FIREBASE_SAVE_DEBOUNCE_MS = 900;
+const SUPABASE_SAVE_DEBOUNCE_MS = 900;
+const SUPABASE_URL = "https://bhuwrwqkwuuzjomskjky.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_iiViQ666fswJ84JaNeNIiw_pHHWR_8A";
 const DEFAULT_TARGET_WEEKS = 2;
 const SKU_HEADER_ALIASES = [
   "jde",
@@ -64,6 +68,10 @@ const dom = {
   deductionStatus: document.getElementById("deductionStatus"),
   toast: document.getElementById("toast"),
   targetWeeksInput: document.getElementById("targetWeeksInput"),
+  settingsCurrentStoreText: document.getElementById("settingsCurrentStoreText"),
+  defaultStoreText: document.getElementById("defaultStoreText"),
+  makeDefaultStoreButton: document.getElementById("makeDefaultStoreButton"),
+  clearDefaultStoreButton: document.getElementById("clearDefaultStoreButton"),
   clearSalesButton: document.getElementById("clearSalesButton"),
   clearInventoryButton: document.getElementById("clearInventoryButton"),
   clearSaleFlagsButton: document.getElementById("clearSaleFlagsButton"),
@@ -78,15 +86,16 @@ let storeRegistry = loadStoreRegistry();
 let currentStoreNumber = storeRegistry.currentStore;
 let state = loadState(currentStoreNumber);
 let saveTimer = null;
-let firebaseSaveTimer = null;
+let supabaseSaveTimer = null;
 let editingProductId = null;
-let syncStatus = "Local only";
+let syncStatus = "Local backup saved";
 let isSwitchingStore = false;
+let supabaseClientPromise = null;
 
 bindEvents();
 render();
 registerServiceWorker();
-initializeFirebaseSync();
+initializeSupabaseSync();
 
 function defaultState() {
   return {
@@ -111,11 +120,16 @@ function loadStoreRegistry() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORE_REGISTRY_KEY) || "{}");
     const stores = [...new Set((parsed.stores || [DEFAULT_STORE_NUMBER]).map(cleanText).filter(Boolean))];
-    const currentStore = cleanText(parsed.currentStore) || stores[0] || DEFAULT_STORE_NUMBER;
+    const defaultStore = getDefaultStoreNumber();
+    const currentStore = defaultStore || cleanText(parsed.currentStore) || stores[0] || DEFAULT_STORE_NUMBER;
     if (!stores.includes(currentStore)) stores.unshift(currentStore);
     return { stores, currentStore };
   } catch {
-    return { stores: [DEFAULT_STORE_NUMBER], currentStore: DEFAULT_STORE_NUMBER };
+    const defaultStore = getDefaultStoreNumber();
+    return {
+      stores: [defaultStore || DEFAULT_STORE_NUMBER],
+      currentStore: defaultStore || DEFAULT_STORE_NUMBER,
+    };
   }
 }
 
@@ -126,17 +140,65 @@ function saveStoreRegistry() {
   }));
 }
 
+function getDefaultStoreNumber() {
+  return cleanText(localStorage.getItem(DEFAULT_STORE_KEY));
+}
+
 function storageKeyForStore(storeNumber) {
   const safeStore = encodeURIComponent(cleanText(storeNumber) || DEFAULT_STORE_NUMBER);
-  return `${STORAGE_KEY}_store_${safeStore}`;
+  return `${STORE_STORAGE_PREFIX}_${safeStore}`;
 }
 
 function migrateLegacyStorageIfNeeded(storeNumber) {
-  if (storeNumber !== DEFAULT_STORE_NUMBER) return;
   const storeKey = storageKeyForStore(storeNumber);
   if (localStorage.getItem(storeKey)) return;
-  const legacyState = localStorage.getItem(STORAGE_KEY);
+  const oldStoreKey = `${STORAGE_KEY}_store_${encodeURIComponent(cleanText(storeNumber) || DEFAULT_STORE_NUMBER)}`;
+  const legacyState = localStorage.getItem(oldStoreKey) || (storeNumber === DEFAULT_STORE_NUMBER ? localStorage.getItem(STORAGE_KEY) : null);
   if (legacyState) localStorage.setItem(storeKey, legacyState);
+}
+
+async function getSupabaseClient() {
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm")
+      .then(({ createClient }) => createClient(SUPABASE_URL, SUPABASE_ANON_KEY));
+  }
+  return supabaseClientPromise;
+}
+
+async function getSupabaseStoreState(storeNumber) {
+  const supabase = await getSupabaseClient();
+  const { data, error } = await supabase
+    .from("store_app_state")
+    .select("app_state, updated_at")
+    .eq("store_number", String(storeNumber))
+    .single();
+
+  if (error) {
+    if (error.code === "PGRST116") return null;
+    throw error;
+  }
+  return data?.app_state ? { ...data.app_state, supabaseUpdatedAt: data.updated_at } : null;
+}
+
+async function saveSupabaseStoreState(storeNumber, appState) {
+  const supabase = await getSupabaseClient();
+  const updatedAt = new Date().toISOString();
+  const { error } = await supabase
+    .from("store_app_state")
+    .upsert({
+      store_number: String(storeNumber),
+      app_state: {
+        ...appState,
+        updatedAt,
+      },
+      updated_at: updatedAt,
+    });
+  if (error) throw error;
+}
+
+async function createSupabaseStoreIfMissing(storeNumber) {
+  const existing = await getSupabaseStoreState(storeNumber);
+  if (!existing) await saveSupabaseStoreState(storeNumber, serializeStateForSupabase());
 }
 
 function catalogProducts(meta = {}) {
@@ -286,9 +348,9 @@ function saveLocalBackup() {
 
 function saveState({ showConfirmation = false } = {}) {
   saveLocalBackup();
-  setSyncStatus("Local only");
-  scheduleFirebaseSave();
-  if (showConfirmation) showToast("Firebase save queued.");
+  setSyncStatus("Local backup saved");
+  scheduleSupabaseSave();
+  if (showConfirmation) showToast("Supabase save queued.");
 }
 
 function scheduleSave() {
@@ -296,34 +358,31 @@ function scheduleSave() {
   saveTimer = setTimeout(() => saveState(), 250);
 }
 
-function scheduleFirebaseSave() {
-  clearTimeout(firebaseSaveTimer);
+function scheduleSupabaseSave() {
+  clearTimeout(supabaseSaveTimer);
   if (isSwitchingStore) return;
-  firebaseSaveTimer = setTimeout(() => syncCurrentStoreToFirebase({ silent: true }), FIREBASE_SAVE_DEBOUNCE_MS);
+  supabaseSaveTimer = setTimeout(() => syncCurrentStoreToSupabase({ silent: true }), SUPABASE_SAVE_DEBOUNCE_MS);
 }
 
-async function syncCurrentStoreToFirebase({ throwOnError = false, silent = false } = {}) {
-  const storeNumber = selectedFirebaseStoreNumber();
+async function syncCurrentStoreToSupabase({ throwOnError = false, silent = false } = {}) {
+  const storeNumber = selectedSupabaseStoreNumber();
   if (!storeNumber) {
-    setSyncStatus("Local only");
-    if (!silent) showToast("Select or add a store number before saving to Firebase.");
-    return false;
-  }
-  if (!window.WineFirebaseSync?.saveStoreState) {
-    setSyncStatus("Local only");
+    setSyncStatus("Local backup saved");
+    if (!silent) showToast("Select or add a store number before saving to Supabase.");
     return false;
   }
   try {
-    setSyncStatus("Saving to Firebase…");
-    await window.WineFirebaseSync.saveStoreState(storeNumber, serializeStateForFirestore());
-    if (storeNumber === currentStoreNumber) setSyncStatus("Synced to Firebase");
+    setSyncStatus("Saving to Supabase…");
+    await saveSupabaseStoreState(storeNumber, serializeStateForSupabase());
+    if (storeNumber === currentStoreNumber) setSyncStatus("Synced to Supabase");
     return true;
   } catch (error) {
     if (storeNumber === currentStoreNumber) {
-      setSyncStatus("Firebase save failed");
-      setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
+      setSyncStatus("Supabase save failed");
+      if (!silent) showSupabaseError(error);
+      if (silent) setStatus("Offline mode: changes are saved on this device and will sync when Supabase is available.");
     }
-    console.error("Firebase save failed", error);
+    if (silent) console.error("Supabase error:", error);
     if (throwOnError) throw error;
     return false;
   }
@@ -331,35 +390,30 @@ async function syncCurrentStoreToFirebase({ throwOnError = false, silent = false
 
 async function saveProjectNow() {
   clearTimeout(saveTimer);
-  clearTimeout(firebaseSaveTimer);
-  if (!selectedFirebaseStoreNumber()) {
+  clearTimeout(supabaseSaveTimer);
+  if (!selectedSupabaseStoreNumber()) {
     saveLocalBackup();
-    setSyncStatus("Local only");
-    showToast("Select or add a store number before saving to Firebase.");
+    setSyncStatus("Local backup saved");
+    showToast("Select or add a store number before saving to Supabase.");
     return;
   }
   saveLocalBackup();
-  if (!window.WineFirebaseSync?.saveStoreState) {
-    setSyncStatus("Local only");
-    showToast("Firebase is not available. Project saved locally only.");
-    return;
-  }
   try {
-    await syncCurrentStoreToFirebase({ throwOnError: true });
-    showToast("Project saved to Firebase");
-    setStatus(`Project saved to Firebase for Store ${currentStoreNumber}.`);
+    await syncCurrentStoreToSupabase({ throwOnError: true });
+    showToast("Project saved to Supabase");
+    setStatus(`Project saved to Supabase for Store ${currentStoreNumber}.`);
   } catch (error) {
-    showToast("Firebase save failed. Project saved locally only.");
-    setStatus("Firebase save failed. Project saved locally only.", true);
+    showToast("Supabase save failed. Project saved locally only.");
+    showSupabaseError(error);
   }
 }
 
-function selectedFirebaseStoreNumber() {
+function selectedSupabaseStoreNumber() {
   const storeNumber = cleanText(currentStoreNumber);
   return storeNumber && storeNumber !== DEFAULT_STORE_NUMBER ? storeNumber : "";
 }
 
-function serializeStateForFirestore() {
+function serializeStateForSupabase() {
   const cleanState = JSON.parse(JSON.stringify(state));
   const products = cleanState.inventory?.products || [];
   return {
@@ -375,9 +429,13 @@ function serializeStateForFirestore() {
     inventoryFileData: cleanState.inventory || { products: [] },
     productOverrides: cleanState.productOverrides || {},
     productEdits: cleanState.productOverrides || {},
+    editedSkus: Object.fromEntries(Object.entries(cleanState.productOverrides || {}).map(([sourceSku, override]) => [sourceSku, override?.sku || sourceSku])),
+    editedDescriptions: Object.fromEntries(Object.entries(cleanState.productOverrides || {}).map(([sourceSku, override]) => [sourceSku, override?.description || ""])),
     orderRecommendations: cleanState.processing?.recommendations || [],
+    categoryState: cleanState.categoryState || {},
     settings: cleanState.settings || {},
     clientLastSaved: cleanState.lastSaved || null,
+    lastUpdated: new Date().toISOString(),
   };
 }
 
@@ -425,6 +483,8 @@ function bindEvents() {
   dom.exportInventoryButton.addEventListener("click", exportInventoryCsv);
   dom.exportOrdersButton.addEventListener("click", exportOrdersCsv);
   dom.settingsButton.addEventListener("click", () => activateTab("settings"));
+  dom.makeDefaultStoreButton.addEventListener("click", makeCurrentStoreDefault);
+  dom.clearDefaultStoreButton.addEventListener("click", clearDefaultStore);
   dom.applyDeductionButton.addEventListener("click", applySalesDeduction);
   dom.clearSalesButton.addEventListener("click", clearSalesData);
   dom.clearInventoryButton.addEventListener("click", clearInventoryCounts);
@@ -452,32 +512,26 @@ function bindEvents() {
   dom.inventoryTable.addEventListener("change", handleInventoryChange);
   dom.orderingTable.addEventListener("change", handleOrderingChange);
   window.addEventListener("online", () => {
-    setStatus("Back online. Syncing latest local changes to Firebase.");
-    syncCurrentStoreToFirebase();
+    setStatus("Back online. Syncing latest local changes to Supabase.");
+    syncCurrentStoreToSupabase();
   });
   window.addEventListener("offline", () => {
-    setSyncStatus("Local only");
-    setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
+    setSyncStatus("Offline mode");
+    setStatus("Offline mode: changes are saved on this device and will sync when Supabase is available.");
   });
 }
 
-async function initializeFirebaseSync() {
+async function initializeSupabaseSync() {
   renderStoreSelector();
-  if (!window.WineFirebaseSync?.ready) {
-    setSyncStatus("Local only");
-    return;
-  }
-  if (!selectedFirebaseStoreNumber()) {
-    setSyncStatus("Local only");
+  if (!selectedSupabaseStoreNumber()) {
+    setSyncStatus("Local backup saved");
     return;
   }
   try {
-    await window.WineFirebaseSync.ready;
-    await loadSelectedStoreFromFirebase();
+    await loadSelectedStoreFromSupabase();
   } catch (error) {
-    setSyncStatus("Firebase save failed");
-    setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
-    console.warn("Firebase initialization failed", error);
+    setSyncStatus("Supabase save failed");
+    showSupabaseError(error);
   }
 }
 
@@ -498,14 +552,12 @@ async function addStore() {
   editingProductId = null;
   render();
   try {
-    setSyncStatus("Saving to Firebase…");
-    await window.WineFirebaseSync?.createStoreIfMissing?.(storeNumber);
-    await loadSelectedStoreFromFirebase({ createIfMissing: true });
+    setSyncStatus("Saving to Supabase…");
+    await loadSelectedStoreFromSupabase({ createIfMissing: true });
     showToast(`Store ${storeNumber} selected.`);
   } catch (error) {
-    setSyncStatus("Firebase save failed");
-    setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
-    console.warn("Add store Firebase setup failed", error);
+    setSyncStatus("Supabase save failed");
+    showSupabaseError(error);
   }
 }
 
@@ -514,7 +566,7 @@ async function switchStore(storeNumber) {
   if (nextStore === currentStoreNumber) return;
   isSwitchingStore = true;
   clearTimeout(saveTimer);
-  clearTimeout(firebaseSaveTimer);
+  clearTimeout(supabaseSaveTimer);
   currentStoreNumber = nextStore;
   storeRegistry.currentStore = nextStore;
   if (!storeRegistry.stores.includes(nextStore)) storeRegistry.stores.push(nextStore);
@@ -523,38 +575,58 @@ async function switchStore(storeNumber) {
   editingProductId = null;
   render();
   isSwitchingStore = false;
-  await loadSelectedStoreFromFirebase();
+  await loadSelectedStoreFromSupabase();
 }
 
-async function loadSelectedStoreFromFirebase({ createIfMissing = false } = {}) {
-  const storeNumber = selectedFirebaseStoreNumber();
+function makeCurrentStoreDefault() {
+  const storeNumber = cleanText(currentStoreNumber);
   if (!storeNumber) {
-    setSyncStatus("Local only");
+    showToast("Select or add a store number before setting a default.");
     return;
   }
-  if (!window.WineFirebaseSync?.getStoreState) {
-    setSyncStatus("Local only");
+  localStorage.setItem(DEFAULT_STORE_KEY, storeNumber);
+  renderDefaultStoreSettings();
+  setStatus(`Store ${storeNumber} is now the default store.`);
+  showToast("Default store saved.");
+}
+
+function clearDefaultStore() {
+  const defaultStore = getDefaultStoreNumber();
+  if (!defaultStore) {
+    showToast("No default store is set.");
+    return;
+  }
+  if (!confirm(`Clear default store ${defaultStore}?`)) return;
+  localStorage.removeItem(DEFAULT_STORE_KEY);
+  renderDefaultStoreSettings();
+  setStatus("Default store cleared. The app will use the last selected store on startup.");
+  showToast("Default store cleared.");
+}
+
+async function loadSelectedStoreFromSupabase({ createIfMissing = false } = {}) {
+  const storeNumber = selectedSupabaseStoreNumber();
+  if (!storeNumber) {
+    setSyncStatus("Local backup saved");
     return;
   }
   try {
-    const remoteState = await window.WineFirebaseSync.getStoreState(storeNumber);
+    const remoteState = await getSupabaseStoreState(storeNumber);
     if (storeNumber !== currentStoreNumber) return;
     if (remoteState) {
       state = hydrateStateFromRemote(remoteState, storeNumber);
       localStorage.setItem(storageKeyForStore(storeNumber), JSON.stringify(state));
       render();
-      setSyncStatus("Synced to Firebase");
-      setStatus(`Store ${storeNumber} loaded from Firebase.`);
+      setSyncStatus("Synced to Supabase");
+      setStatus(`Store ${storeNumber} loaded from Supabase.`);
       return;
     }
-    if (createIfMissing) await window.WineFirebaseSync.createStoreIfMissing(storeNumber);
-    await syncCurrentStoreToFirebase();
+    if (createIfMissing) await createSupabaseStoreIfMissing(storeNumber);
+    await syncCurrentStoreToSupabase();
   } catch (error) {
     if (storeNumber === currentStoreNumber) {
-      setSyncStatus("Firebase save failed");
-      setStatus("Offline/local mode: changes are saved on this device and will sync when Firebase is available.");
+      setSyncStatus("Supabase save failed");
+      showSupabaseError(error);
     }
-    console.warn("Firebase store load failed", error);
   }
 }
 
@@ -814,6 +886,7 @@ function parseCsv(text) {
 
 function render() {
   renderStoreSelector();
+  renderDefaultStoreSettings();
   renderSyncStatus();
   renderLastSaved();
   dom.targetWeeksInput.value = state.settings.targetWeeks;
@@ -830,6 +903,13 @@ function renderStoreSelector() {
     .map(storeNumber => `<option value="${escapeHtml(storeNumber)}" ${storeNumber === currentStoreNumber ? "selected" : ""}>${escapeHtml(storeNumber)}</option>`)
     .join("");
   dom.currentStoreText.textContent = `Current store: ${currentStoreNumber}`;
+}
+
+function renderDefaultStoreSettings() {
+  const defaultStore = getDefaultStoreNumber();
+  dom.settingsCurrentStoreText.textContent = currentStoreNumber || "None selected";
+  dom.defaultStoreText.textContent = defaultStore || "None set";
+  dom.clearDefaultStoreButton.disabled = !defaultStore;
 }
 
 function renderSyncStatus() {
@@ -1249,7 +1329,7 @@ function clearAllSaleFlags() {
 }
 
 function clearAllLocalData() {
-  if (!confirm(`Clear all saved data for Store ${currentStoreNumber}? This will also sync the cleared state to Firebase when available.`)) return;
+  if (!confirm(`Clear all saved data for Store ${currentStoreNumber}? This will also sync the cleared state to Supabase when available.`)) return;
   localStorage.removeItem(storageKeyForStore(currentStoreNumber));
   state = defaultState();
   render();
@@ -1463,15 +1543,21 @@ function setStatus(message, isError = false) {
   dom.statusBanner.classList.toggle("error", isError);
 }
 
+function showSupabaseError(error) {
+  console.error("Supabase error:", error);
+  setStatus(`Supabase error: ${error?.message || error?.code || "Unknown error"}`, true);
+}
+
 function setSyncStatus(message) {
   syncStatus = message;
   renderSyncStatus();
 }
 
 function syncStatusClass(message) {
-  if (message === "Synced to Firebase") return "synced";
-  if (message === "Saving to Firebase…") return "syncing";
-  if (message === "Firebase save failed") return "error";
+  if (message === "Synced to Supabase") return "synced";
+  if (message === "Saving to Supabase…") return "syncing";
+  if (message === "Offline mode") return "syncing";
+  if (message === "Supabase save failed") return "error";
   return "local";
 }
 
@@ -1544,6 +1630,10 @@ function registerServiceWorker() {
     });
   });
 }
+
+
+
+
 
 
 

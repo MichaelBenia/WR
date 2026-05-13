@@ -15,13 +15,13 @@
           <h1>Wine Order Count</h1>
           <p class="subtitle">
             Import sales and inventory files, count stock, review order needs,
-            and sync each store through Firebase.
+            and sync each store through Supabase.
           </p>
         </div>
         <div class="save-card">
           <span>Last saved</span>
           <strong id="lastSavedText">Never</strong>
-          <small id="syncStatusText">Local only</small>
+          <small id="syncStatusText">Local backup saved</small>
         </div>
       </header>
 
@@ -145,7 +145,27 @@
                 <input id="targetWeeksInput" type="number" min="0.5" step="0.5" />
               </label>
               <p class="small-muted">
-                Saved locally first, then synced to Firebase for the selected store.
+                Saved locally first, then synced to Supabase for the selected store.
+              </p>
+            </section>
+            <section class="card">
+              <h2>Default Store</h2>
+              <div class="default-store-display">
+                <span>Current store</span>
+                <strong id="settingsCurrentStoreText">default</strong>
+              </div>
+              <div class="default-store-display">
+                <span>Default store</span>
+                <strong id="defaultStoreText">None set</strong>
+              </div>
+              <button id="makeDefaultStoreButton" class="secondary-button">
+                Make Current Store Default
+              </button>
+              <button id="clearDefaultStoreButton" class="secondary-button danger">
+                Clear Default Store
+              </button>
+              <p class="small-muted">
+                The default store only controls which store opens first. Data still saves under the selected store.
               </p>
             </section>
           </div>
@@ -164,7 +184,6 @@
       }
     </script>
     <script src="catalog.js"></script>
-    <script src="firebase-config.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
